@@ -158,8 +158,9 @@ namespace kbd
 		// Возвращает набор символов, которые будут при нажатии определенной клавиши на определенном слое
 		const std::wstring& getSymbols(Key key) const; 
 		const Keys& 		getKeys(wchar_t letter) const;
+
 		/** Возвращает минимальную последовательность нажатий, чтобы включить некоторый слой. */
-		const KeyPoses&		getLayerKeys(int currentLayer, int toLayer) const;
+		const std::vector<KeyPoses>& getLayerKeys(int currentLayer, int toLayer) const;
 
 		/** Эмулирует нажатие клавиш, возвращает какой текст напишется в итоге. */
 		/** Особенность: тут передаются только нажатия и зажатия клавиш, тут может быть зажата какая-то клавиша, чтобы включить слой. */
@@ -170,10 +171,10 @@ namespace kbd
 		const std::vector<LayoutSymbols>& getLayoutInnerFormat(void) const;
 
 	private:
-		std::vector<LayoutSymbols> 				m_symbols;
-		std::vector<std::vector<std::wstring>> 	m_layerMas;
-		std::map<wchar_t, Keys>					m_keyMap;
-		std::map<std::pair<int, int>, KeyPoses>	m_layerMap;
+		std::vector<LayoutSymbols> 								m_symbols;
+		std::vector<std::vector<std::wstring>> 					m_layerMas;
+		std::map<wchar_t, Keys>									m_keyMap;
+		std::map<std::pair<int, int>, std::vector<KeyPoses>>	m_layerMap;
 	};
 
 	//-------------------------------------------------------------------------
@@ -186,7 +187,7 @@ namespace kbd
 	);
 
 	// Раскладывает нажатие клавиш со слоём на все возможные нажатия кнопок на клавиатуре. Тут уже учитывается физическое состояние (слой и занятые пальцы).
-	Taps decomposeToTaps(
+	std::vector<Taps> decomposeToTaps(
 		const Layout& layout,
 		const Keys& keys,
 		PhysicalState& state

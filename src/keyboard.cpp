@@ -1,14 +1,154 @@
-﻿#include <boost/config.hpp>
-#include <boost/graph/graph_traits.hpp>
-#include <boost/graph/adjacency_list.hpp>
-#include <boost/graph/dijkstra_shortest_paths.hpp>
-#include <boost/property_map/property_map.hpp>
+﻿#include <vector>
+#include <algorithm>
+#include <set>
 
 #include <kbd/keyboard.h>
 #include <kbd/combinatorics.h>
 
 namespace kbd
 {
+
+//-----------------------------------------------------------------------------
+// Ребро ориентированного графа
+struct Edge {
+	int a;
+	int b;
+
+	KeyPos key; // Клавиша, которая с слоя a включает слой b
+};
+
+typedef std::vector<Edge> Edges;
+
+//-----------------------------------------------------------------------------
+// Класс ориентированного графа
+class DirectedGraph
+{
+public:
+	void addEdge(Edge ed);
+	int getEdgeCount(void) const;
+	Edges getAdjacent(int i) const;
+	Edge getEdge(int i) const;
+	void deleteEdge(int i);
+	std::vector<int> getVertixes(void) const;
+private:
+	std::vector<Edge> m_edges;
+};
+
+//-----------------------------------------------------------------------------
+// Обходит граф, при этом инициализирует map, который отвечает за все возможные методы перехода с одного слоя на другой слой
+void travelGraph_InitMap(
+	const DirectedGraph& graph,
+	std::map<std::pair<int, int>, std::vector<KeyPoses>>& layerMap,
+	int firstLayer);
+
+// Рекурсивная часть верхней функции
+void travelGraph_InitMap_r(
+	const DirectedGraph& graph,
+	std::map<std::pair<int, int>, std::vector<KeyPoses>>& layerMap,
+	KeyPoses path,
+	std::set<int> attendedLayers,
+	int firstLayer,
+	int currentLayer,
+	int currentKey
+);
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+//-----------------------------------------------------------------------------
+void DirectedGraph::addEdge(Edge ed) {
+	m_edges.push_back(ed);
+}
+
+//-----------------------------------------------------------------------------
+int DirectedGraph::getEdgeCount(void) const {
+	return m_edges.size();
+}
+
+//-----------------------------------------------------------------------------
+Edges DirectedGraph::getAdjacent(int k) const {
+	Edges result;
+	for (const auto& ed : m_edges) {
+		if (ed.a == k)
+			result.push_back(ed);
+	}
+
+	return result;
+}
+
+//-----------------------------------------------------------------------------
+Edge DirectedGraph::getEdge(int i) const {
+	return m_edges[i];
+}
+
+//-----------------------------------------------------------------------------
+void DirectedGraph::deleteEdge(int i) {
+	m_edges.erase(m_edges.begin() + i);
+}
+
+//-----------------------------------------------------------------------------
+std::vector<int> DirectedGraph::getVertixes(void) const {
+	std::vector<int> result;
+	for (const auto& ed : m_edges) {
+		result.push_back(ed.a);
+		result.push_back(ed.b);
+	}
+	std::sort(result.begin(), result.end());
+	result.erase(std::unique(result.begin(), result.end()), result.end());
+	return result;
+}
+
+//-----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+void travelGraph_InitMap(
+	const DirectedGraph& graph,
+	std::map<std::pair<int, int>, std::vector<KeyPoses>>& layerMap,
+	int firstLayer) {
+	travelGraph_InitMap_r(graph, layerMap, {}, {}, firstLayer, firstLayer, 0);
+}
+
+//-----------------------------------------------------------------------------
+void travelGraph_InitMap_r(
+	const DirectedGraph& graph,
+	std::map<std::pair<int, int>, std::vector<KeyPoses>>& layerMap,
+	KeyPoses path,
+	std::set<int> attendedLayers,
+	int firstLayer,
+	int currentLayer,
+	int currentKey
+) {
+	attendedLayers.insert(currentLayer);
+	if (currentLayer != firstLayer)
+		path.push_back(currentKey);
+	if (path.size() != 0) {
+		// Ищем дубликаты текущего пути. Если их нет, то добавляем
+		auto& paths = layerMap[{firstLayer, currentLayer}];
+
+		bool isAdd = true;
+		for (const auto& i : paths)
+			if (i.size() == path.size()) {
+				bool isEqual = true;
+				for (int j = 0; j < i.size(); ++j)
+					isEqual &= i[j] == path[j];
+				if (isEqual) {
+					isAdd = false;
+					break;
+				}
+			}
+		if (isAdd)
+			paths.push_back(path);
+	}
+
+	auto adj = graph.getAdjacent(currentLayer);
+	for (auto& i : adj) {
+		if (attendedLayers.find(i.b) == attendedLayers.end())
+			travelGraph_InitMap_r(graph, layerMap, path, attendedLayers, firstLayer, i.b, i.key);
+	}
+}
 
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
@@ -167,7 +307,8 @@ Layout::Layout() {
 //-----------------------------------------------------------------------------
 Layout::Layout(const Keyboard& keyboard,
 			   const std::vector<LayoutSymbols>& symbols) : Keyboard(keyboard), m_symbols(symbols) {
-	using namespace boost;
+	//-------------------------------------------------------------------------
+	// Заполняем массив слоёв с клавишами
 
 	// Подсчет числа слоёв
 	int layers = 0;
@@ -182,85 +323,26 @@ Layout::Layout(const Keyboard& keyboard,
 	for (const auto& i : symbols)
 		m_layerMas[i.key.layer][i.key.key] = i.symbols;
  
-	// Инициализируем map
+ 	//-------------------------------------------------------------------------
+	// Инициализируем map для клавиш
 	for (const auto& i : symbols)
 		m_keyMap[i.symbols[0]].push_back(i.key);
 
+	//-------------------------------------------------------------------------
 	// Инициализируем map для слоёв
-	typedef adjacency_list<
-		listS, vecS, directedS, 
-		no_property, property<edge_weight_t, int>> graph_t;
-	typedef graph_traits<graph_t>::vertex_descriptor vertex_descriptor;
-	typedef graph_traits<graph_t>::vertex_iterator vertex_iterator;
-	typedef std::pair<int, int> Edge;
 
-	// Сначала составляем масссив смежности для всех ребер
-	int num_layers = 20;
-	std::vector<Edge> edge_array;
-	std::map<Edge, KeyPos> edge_map;
+	// Создаём граф по слоям
+	DirectedGraph graph;
 	for (const auto& i : symbols) {
 		auto layer = getLayer(i.symbols[0]);
-		if (i.symbols.size() == 1 && layer) {
-			edge_array.push_back({i.key.layer, *layer});
-			edge_map[edge_array.back()] = i.key.key;
-		}
+		if (i.symbols.size() == 1 && layer)
+			graph.addEdge({i.key.layer, *layer, i.key.key});
 	}
 
-	// Создаем граф и прочую непонятную вещь, которую я нагло украл из примера boost
-	std::vector<int> weights(edge_array.size(), 1);
-	graph_t g(edge_array.begin(), edge_array.end(), weights.begin(), num_layers);
-	std::vector<vertex_descriptor> p(num_vertices(g));
-	std::vector<int> d(num_vertices(g));
-
-	// Перебираем все слои
-	for (int i = 0; i < num_layers; i++) {
-		// Ставим за точку отсчета текущий слой
-		vertex_descriptor s = vertex(i, g);
-
-		// Находим все пути от текущего слоя до остальных
-		dijkstra_shortest_paths(g, s,
-			predecessor_map(make_iterator_property_map(
-				p.begin(), 
-				get(vertex_index, g))
-			).
-			distance_map(make_iterator_property_map(
-				d.begin(), 
-				get(vertex_index, g)
-			))
-		);
-
-		// Перебираем все вершины, для каждой вершины находим путь от текущего слоя i, преобразуем его в KeyPos, закидываем в map
-		vertex_iterator vi, vend;
-		for (tie(vi, vend) = vertices(g); vi != vend; ++vi) {
-			std::vector<int> path;
-			KeyPoses keys;
-			path.push_back(*vi);
-			auto current = p[*vi];
-			while (current != i) {
-				path.push_back(current);
-				current = p[current];
-
-				// Костыль для тех слоёв, которые с текущим не находятся в одной смежности
-				if (p[current] == current && current != i)
-					goto next;
-			}
-			path.push_back(current);
-			std::reverse(path.begin(), path.end());
-
-			// Преобразуем направление в KeyPos
-			for (int k = 0; k < path.size() - 1; ++k) {
-				try {
-					keys.push_back(edge_map.at({ path[k], path[k + 1] }));
-				} catch (...) {
-					goto next;
-				}
-			}
-
-			// Закидываем это в map
-			m_layerMap[{i, *vi}] = keys;
-			next:;
-		}
-	}
+	// Перебираем все вершины и из них находим все пути до других вершин
+	auto vertixes = graph.getVertixes();
+	for (const auto& i : vertixes)
+		travelGraph_InitMap(graph, m_layerMap, i);
 }
 
 //-----------------------------------------------------------------------------
@@ -274,7 +356,7 @@ const Keys& Layout::getKeys(wchar_t letter) const {
 }
 
 //-----------------------------------------------------------------------------
-const KeyPoses&	Layout::getLayerKeys(int currentLayer, int toLayer) const {
+const std::vector<KeyPoses>& Layout::getLayerKeys(int currentLayer, int toLayer) const {
 	try {
 		return m_layerMap.at({currentLayer, toLayer});
 	} catch (...) {
@@ -461,7 +543,15 @@ std::vector<Keys> decomposeToKeys(const Layout& layout, const std::wstring& text
 }
 
 //-----------------------------------------------------------------------------
-Taps decomposeToTaps(const Layout& layout, const Keys& keys, PhysicalState& state) {
+std::vector<Taps> decomposeToTaps(const Layout& layout, const Keys& keys, PhysicalState& state) {
+	/** 
+	Критерий, чтобы сделать зажатие клавиши для включения некоторого слоя:
+	Более 1 буквы набирается в другом и одном и том же слое. 
+	1 буква и одна клавиша для включения другого слоя набираются в другом слое.
+	Когда отключать слои?
+	Емоё, как всё сложно.
+	Мне действительно это нужно? :)
+	 */
 	return {};
 }
 
